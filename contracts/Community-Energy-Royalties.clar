@@ -7,8 +7,10 @@
 (define-constant ERR_UNAUTHORIZED (err u105))
 (define-constant ERR_INVALID_COORDINATES (err u106))
 (define-constant ERR_FIELD_INACTIVE (err u107))
+(define-constant ERR_INVALID_PRODUCTION (err u108))
 
 (define-data-var next-field-id uint u1)
+(define-data-var next-production-id uint u1)
 (define-data-var next-community-id uint u1)
 (define-data-var total-fields uint u0)
 (define-data-var total-communities uint u0)
@@ -70,6 +72,25 @@
     distance: uint,
     royalty-share: uint,
     is-eligible: bool
+  }
+)
+
+(define-map production-records
+  { production-id: uint }
+  {
+    field-id: uint,
+    amount: uint,
+    recorded-at: uint,
+    operator: principal
+  }
+)
+
+(define-map field-production-history
+  { field-id: uint }
+  {
+    production-ids: (list 100 uint),
+    total-production: uint,
+    last-recorded: uint
   }
 )
 
@@ -327,4 +348,48 @@
     next-field-id: (var-get next-field-id),
     next-community-id: (var-get next-community-id)
   }
+)
+
+(define-public (record-production (field-id uint) (amount uint))
+  (let (
+    (field (unwrap! (map-get? energy-fields { field-id: field-id }) ERR_NOT_FOUND))
+    (production-id (var-get next-production-id))
+    (current-time (default-to u0 (get-stacks-block-info? time (- stacks-block-height u1))))
+    (history (default-to { production-ids: (list), total-production: u0, last-recorded: u0 } 
+                         (map-get? field-production-history { field-id: field-id })))
+  )
+    (asserts! (is-eq tx-sender (get operator field)) ERR_UNAUTHORIZED)
+    (asserts! (get is-active field) ERR_FIELD_INACTIVE)
+    (asserts! (> amount u0) ERR_INVALID_PRODUCTION)
+    
+    (map-set production-records
+      { production-id: production-id }
+      {
+        field-id: field-id,
+        amount: amount,
+        recorded-at: current-time,
+        operator: tx-sender
+      }
+    )
+    
+    (map-set field-production-history
+      { field-id: field-id }
+      {
+        production-ids: (unwrap! (as-max-len? (append (get production-ids history) production-id) u100) ERR_INVALID_PRODUCTION),
+        total-production: (+ (get total-production history) amount),
+        last-recorded: current-time
+      }
+    )
+    
+    (var-set next-production-id (+ production-id u1))
+    (ok production-id)
+  )
+)
+
+(define-read-only (get-production-record (production-id uint))
+  (map-get? production-records { production-id: production-id })
+)
+
+(define-read-only (get-field-production-history (field-id uint))
+  (map-get? field-production-history { field-id: field-id })
 )
